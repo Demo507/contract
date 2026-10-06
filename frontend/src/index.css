@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Fraunces", serif;
+  --font-body: "IBM Plex Sans", sans-serif;
+
+  --color-ink: #0b1220;        /* page background — deep indigo */
+  --color-surface: #141b2e;    /* card/panel background */
+  --color-surface-raised: #1b2438;
+  --color-line: #2a3450;       /* borders */
+  --color-text: #edeff5;
+  --color-muted: #8a93ac;
+  --color-brass: #c9a227;      /* primary accent — value, currency, trust */
+  --color-brass-hover: #b8911f;
+  --color-release: #4f9d69;    /* confirmed / released / success */
+  --color-hold: #d98c3f;       /* pending / locked state */
+  --color-danger: #c0564f;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
