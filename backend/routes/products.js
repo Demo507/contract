@@ -1,31 +1,43 @@
 import express from 'express';
-import { createClient } from '@supabase/supabase-client';
+import { pool } from '../db.js';
 
 const router = express.Router();
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-// GET all active products
 router.get('/', async (req, res) => {
-  const { data, error } = await supabase
-    .from('products')
-    .select('*')
-    .eq('is_active', true);
-
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+  const { rows } = await pool.query('SELECT * FROM products ORDER BY created_at DESC');
+  res.json(rows);
 });
 
-// POST a new product
+router.get('/:id', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
+});
+
 router.post('/', async (req, res) => {
-  const { title, price_tch8, seller_address } = req.body;
+  const { seller_address, title, description, price_tch8, image_url } = req.body;
+  if (!seller_address || !title || !price_tch8) {
+    return res.status(400).json({ error: 'seller_address, title, price_tch8 required' });
+  }
 
-  const { data, error } = await supabase
-    .from('products')
-    .insert([{ title, price_tch8, seller_address: seller_address.toLowerCase() }])
-    .select();
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO products (seller_address, title, description, price_tch8, image_url)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [seller_address, title, description || '', price_tch8, image_url || '']
+    );
+    res.status(201).json({ id: rows[0].id });
+  } catch (err) {
+    // This will print the precise column name causing the crash!
+    console.error("❌ CRITICAL INSERT ERROR:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ success: true, data });
+
+router.get('/seller/:address', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM products WHERE seller_address = $1 ORDER BY created_at DESC', [req.params.address]);
+  res.json(rows);
 });
 
 export default router;

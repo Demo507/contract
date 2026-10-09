@@ -1,75 +1,27 @@
 import express from 'express';
-import { createClient } from '@supabase/supabase-client';
+import { pool } from '../db.js';
 
 const router = express.Router();
 
-// Initialize the database client using your environment variables
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-
-// 1. GET /api/orders?buyer=0x... or ?seller=0x...
 router.get('/', async (req, res) => {
   const { buyer, seller } = req.query;
-  
-  let query = supabase.from('orders').select('*, products(*)').order('updated_at', { ascending: false });
-
-  if (buyer) {
-    query = query.eq('buyer_address', buyer.toLowerCase());
-  } else if (seller) {
-    query = query.eq('seller_address', seller.toLowerCase());
-  }
-
-  const { data, error } = await query;
-
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+  let result;
+  if (buyer) result = await pool.query('SELECT * FROM orders WHERE buyer_address = $1 ORDER BY created_at DESC', [buyer]);
+  else if (seller) result = await pool.query('SELECT * FROM orders WHERE seller_address = $1 ORDER BY created_at DESC', [seller]);
+  else result = await pool.query('SELECT * FROM orders ORDER BY created_at DESC');
+  res.json(result.rows);
 });
 
-// 2. GET /api/orders/:orderId (Look up by blockchain contract order ID)
 router.get('/:orderId', async (req, res) => {
-  const { data, error } = await supabase
-    .from('orders')
-    .select('*, products(*)')
-    .eq('blockchain_order_id', req.params.orderId)
-    .single(); // Expecting only one match
-
-  if (error) return res.status(404).json({ error: 'Order not found in global register' });
-  res.json(data);
+  const { rows } = await pool.query('SELECT * FROM orders WHERE order_id = $1', [req.params.orderId]);
+  if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
 });
 
-// 3. POST /api/orders (Create a tracking record when an escrow order is paid on-chain)
-router.post('/', async (req, res) => {
-  const { blockchainOrderId, productId, buyerAddress, sellerAddress, amountTch8 } = req.body;
-
-  const { data, error } = await supabase
-    .from('orders')
-    .insert([
-      {
-        blockchain_order_id: blockchainOrderId,
-        product_id: productId,
-        buyer_address: buyerAddress.toLowerCase(),
-        seller_address: sellerAddress.toLowerCase(),
-        amount_tch8: amountTch8,
-        status: 'Paid'
-      }
-    ])
-    .select();
-
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ success: true, data });
-});
-
-// 4. PATCH /api/orders/:orderId/status (Update state: 'Delivered', 'Released', etc.)
-router.patch('/:orderId/status', async (req, res) => {
-  const { status } = req.body; // Expects 'Delivered', 'Released', 'Refunded', 'Disputed'
-
-  const { data, error } = await supabase
-    .from('orders')
-    .update({ status: status, updated_at: new Date() })
-    .eq('blockchain_order_id', req.params.orderId)
-    .select();
-
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ success: true, data });
+router.patch('/:orderId/link-product', async (req, res) => {
+  const { product_id } = req.body;
+  await pool.query('UPDATE orders SET product_id = $1 WHERE order_id = $2', [product_id, req.params.orderId]);
+  res.json({ ok: true });
 });
 
 export default router;

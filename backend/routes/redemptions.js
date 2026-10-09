@@ -1,17 +1,45 @@
 import express from 'express';
-import { createClient } from '@supabase/supabase-client';
+import { ethers } from 'ethers';
+import { readFileSync } from 'fs';
+import { pool } from '../db.js';
 
 const router = express.Router();
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const escrowAbi = JSON.parse(readFileSync('./contracts/Escrow.abi.json'));
 
-// GET all redemptions
 router.get('/', async (req, res) => {
-  const { data, error } = await supabase
-    .from('redemptions')
-    .select('*');
+  const { seller } = req.query;
+  const result = seller
+    ? await pool.query('SELECT * FROM redemptions WHERE seller_address = $1 ORDER BY created_at DESC', [seller])
+    : await pool.query('SELECT * FROM redemptions ORDER BY created_at DESC');
+  res.json(result.rows);
+});
 
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+router.post('/:id/confirm', async (req, res) => {
+  try {
+    const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+    const wallet = new ethers.Wallet(process.env.OPERATOR_PRIVATE_KEY, provider);
+    const escrow = new ethers.Contract(process.env.ESCROW_ADDRESS, escrowAbi, wallet);
+    const tx = await escrow.confirmRedemption(req.params.id);
+    await tx.wait();
+    res.json({ ok: true, txHash: tx.hash });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:id/reject', async (req, res) => {
+  try {
+    const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+    const wallet = new ethers.Wallet(process.env.OPERATOR_PRIVATE_KEY, provider);
+    const escrow = new ethers.Contract(process.env.ESCROW_ADDRESS, escrowAbi, wallet);
+    const tx = await escrow.rejectRedemption(req.params.id);
+    await tx.wait();
+    res.json({ ok: true, txHash: tx.hash });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;

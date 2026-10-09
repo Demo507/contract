@@ -1,133 +1,80 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAccount, useWriteContract } from 'wagmi';
-
-const BACKEND_URL = "https://onrender.com";
-const ESCROW_CONTRACT_ADDRESS = "0xCC46849276578531cD274ffc2b95b019bafc1463";
-const ESCROW_ABI = [{ name: 'markDelivered', type: 'function', stateMutability: 'external', inputs: [{ name: 'orderId', type: 'uint256' }], outputs: [] }];
+import { formatUnits, parseUnits } from 'viem';
+import { BACKEND_URL, ESCROW_ADDRESS } from '../contracts/addresses.js';
+import { escrowAbi } from '../contracts/escrowAbi.js';
+import StatusBadge from '../components/StatusBadge.jsx';
 
 export default function MySales() {
-  const { address: walletAddress } = useAccount();
-  const { writeContractAsync } = useWriteContract();
-  const [sales, setSales] = useState([]);
-  const [msg, setMsg] = useState("");
+  const { address, isConnected } = useAccount();
+  const [orders, setOrders] = useState([]);
+  const [redeemAmount, setRedeemAmount] = useState('');
+  const { writeContractAsync, isPending } = useWriteContract();
 
-  useEffect(() => {
-    if (walletAddress) {
-      fetch(`${BACKEND_URL}/api/orders?seller=${walletAddress}`)
-        .then(res => res.json())
-        .then(data => setSales(data))
-        .catch(e => console.error(e));
-    }
-  }, [walletAddress]);
+  async function loadOrders() {
+    if (!address) return;
+    const res = await fetch(`${BACKEND_URL}/api/orders?seller=${address}`);
+    setOrders(await res.json());
+  }
+  useEffect(() => { loadOrders(); }, [address]);
 
-  const shipItem = async (blockchainOrderId) => {
+  async function handleMarkDelivered(orderId) {
     try {
-      setMsg("⏳ Submitting delivery status to blockchain...");
-      await writeContractAsync({
-        address: ESCROW_CONTRACT_ADDRESS,
-        abi: ESCROW_ABI,
-        functionName: 'markDelivered',
-        args: [BigInt(blockchainOrderId)]
-      });
+      await writeContractAsync({ address: ESCROW_ADDRESS, abi: escrowAbi, functionName: 'markDelivered', args: [orderId] });
+      await loadOrders();
+    } catch (err) { console.error(err); }
+  }
 
-      await fetch(`${BACKEND_URL}/api/orders/${blockchainOrderId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Delivered' })
-      });
+  async function handleRequestRedemption() {
+    if (!redeemAmount) return;
+    try {
+      await writeContractAsync({ address: ESCROW_ADDRESS, abi: escrowAbi, functionName: 'requestRedemption', args: [parseUnits(redeemAmount, 6)] });
+      setRedeemAmount('');
+    } catch (err) { console.error(err); }
+  }
 
-      setMsg("✅ Order flagged as Delivered! Awaiting buyer confirmation.");
-    } catch (err) { setMsg(`❌ Error: ${err.message}`); }
-  };
+  if (!isConnected) return <p style={{ color: 'var(--color-muted)' }}>Connect your wallet to see your sales.</p>;
 
   return (
-    <div className="text-white space-y-4">
-      <h2 className="text-xl font-medium">My Sales (Incoming Vendor Panel)</h2>
-      {msg && <div className="p-2 bg-zinc-800 rounded">{msg}</div>}
-      <div className="space-y-3">
-        {sales.map(s => (
-          <div key={s.id} className="p-4 bg-zinc-900 border border-zinc-800 rounded flex justify-between items-center">
-            <div>
-              <p className="font-medium">{s.products?.title || "Ecosystem Order"}</p>
-              <p className="text-sm text-zinc-400">Earnings: {s.amount_tch8} TCH8 | Status: <span className="font-semibold text-blue-400">{s.status}</span></p>
-            </div>
-            <div>
-              {s.status === 'Paid' && (
-                <button onClick={() => shipItem(s.blockchain_order_id)} className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700">Mark Delivered</button>
-              )}
-              {s.status === 'Released' && (
-                <span className="text-xs text-emerald-400 bg-emerald-950/50 border border-emerald-800 px-2.5 py-1 rounded font-medium">🎉 Funds Unlocked in Wallet</span>
-              )}
-            </div>
+    <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="text-white font-semibold mb-3">Orders</h2>
+        {orders.length === 0 ? <p style={{ color: 'var(--color-muted)' }}>No sales yet.</p> : (
+          <div className="flex flex-col gap-3">
+            {orders.map((o) => (
+              <div key={o.order_id} className="rounded-md p-4 flex items-center justify-between" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-line)' }}>
+                <div>
+                  <p className="font-medium">Order #{o.order_id}</p>
+                  <div className="flex items-center gap-3 mt-1">
+                    <span className="text-sm" style={{ color: 'var(--color-muted)' }}>{formatUnits(BigInt(o.amount), 6)} TCH8</span>
+                    <StatusBadge status={o.status} />
+                  </div>
+                </div>
+                {o.status === 'Paid' && (
+                  <button onClick={() => handleMarkDelivered(o.order_id)} disabled={isPending}
+                    className="px-3 py-1.5 text-sm rounded font-medium text-[var(--color-ink)] disabled:opacity-50"
+                    style={{ background: 'var(--color-brass)' }}>
+                    Mark Delivered
+                  </button>
+                )}
+                {o.status === 'Released' && (
+                  <span style={{ color: 'var(--color-release)' }} className="text-sm">Claim TCH8 — balance updated</span>
+                )}
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
-    </div>
-  );
-}
-import React, { useState, useEffect } from 'react';
-import { useAccount, useWriteContract } from 'wagmi';
-
-const BACKEND_URL = "https://onrender.com";
-const ESCROW_CONTRACT_ADDRESS = "0xYourEscrowContractAddressHere";
-const ESCROW_ABI = [{ name: 'markDelivered', type: 'function', stateMutability: 'external', inputs: [{ name: 'orderId', type: 'uint256' }], outputs: [] }];
-
-export default function MySales() {
-  const { address: walletAddress } = useAccount();
-  const { writeContractAsync } = useWriteContract();
-  const [sales, setSales] = useState([]);
-  const [msg, setMsg] = useState("");
-
-  useEffect(() => {
-    if (walletAddress) {
-      fetch(`${BACKEND_URL}/api/orders?seller=${walletAddress}`)
-        .then(res => res.json())
-        .then(data => setSales(data))
-        .catch(e => console.error(e));
-    }
-  }, [walletAddress]);
-
-  const shipItem = async (blockchainOrderId) => {
-    try {
-      setMsg("⏳ Submitting delivery status to blockchain...");
-      await writeContractAsync({
-        address: ESCROW_CONTRACT_ADDRESS,
-        abi: ESCROW_ABI,
-        functionName: 'markDelivered',
-        args: [BigInt(blockchainOrderId)]
-      });
-
-      await fetch(`${BACKEND_URL}/api/orders/${blockchainOrderId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Delivered' })
-      });
-
-      setMsg("✅ Order flagged as Delivered! Awaiting buyer confirmation.");
-    } catch (err) { setMsg(`❌ Error: ${err.message}`); }
-  };
-
-  return (
-    <div className="text-white space-y-4">
-      <h2 className="text-xl font-medium">My Sales (Incoming Vendor Panel)</h2>
-      {msg && <div className="p-2 bg-zinc-800 rounded">{msg}</div>}
-      <div className="space-y-3">
-        {sales.map(s => (
-          <div key={s.id} className="p-4 bg-zinc-900 border border-zinc-800 rounded flex justify-between items-center">
-            <div>
-              <p className="font-medium">{s.products?.title || "Ecosystem Order"}</p>
-              <p className="text-sm text-zinc-400">Earnings: {s.amount_tch8} TCH8 | Status: <span className="font-semibold text-blue-400">{s.status}</span></p>
-            </div>
-            <div>
-              {s.status === 'Paid' && (
-                <button onClick={() => shipItem(s.blockchain_order_id)} className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700">Mark Delivered</button>
-              )}
-              {s.status === 'Released' && (
-                <span className="text-xs text-emerald-400 bg-emerald-950/50 border border-emerald-800 px-2.5 py-1 rounded font-medium">🎉 Funds Unlocked in Wallet</span>
-              )}
-            </div>
-          </div>
-        ))}
+      <div className="rounded-md p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-line)' }}>
+        <h2 className="font-display text-xl mb-1">Request Payout</h2>
+        <p className="text-sm mb-3" style={{ color: 'var(--color-muted)' }}>Lock your TCH8 to redeem — finish the cash-out on the Exchange page.</p>
+        <div className="flex gap-2">
+          <input type="number" value={redeemAmount} onChange={(e) => setRedeemAmount(e.target.value)} placeholder="Amount in TCH8" />
+          <button onClick={handleRequestRedemption} disabled={isPending || !redeemAmount}
+            style={{ background: 'var(--color-release)' }} className="px-4 py-2 text-sm rounded font-medium text-[var(--color-ink)]">
+            Redeem
+          </button>
+        </div>
       </div>
     </div>
   );
