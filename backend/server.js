@@ -25,9 +25,4 @@ app.get('/', (req, res) => res.json({ status: 'TCH8 backend running' }));
 
 const port = process.env.PORT || 4000;
 
-initDb()
-  .then(() => app.listen(port, () => console.log(`Server running on http://localhost:${port}`)))
-  .catch((err) => {
-    console.error('Failed to initialize database:', err);
-    process.exit(1);
-  });
+app.listen(port, () => console.log(`Server running on port ${port}`));
