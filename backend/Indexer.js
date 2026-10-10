@@ -1,23 +1,33 @@
 import 'dotenv/config';
 import { ethers } from 'ethers';
-import { readFileSync } from 'fs';
 import { pool, initDb } from './db.js';
 
-const escrowAbi = JSON.parse(readFileSync('./contracts/Escrow.abi.json'));
+// Standard JavaScript imports matching your .js ABI files
+import { escrowAbi } from './contracts/Escrow.abi.js';
+import { tch8Abi } from './contracts/TCH8.Abi.js';
 
 async function main() {
   await initDb();
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+  
+  // Set up both contracts using their respective environment variables
   const escrow = new ethers.Contract(process.env.ESCROW_ADDRESS, escrowAbi, provider);
+  const tch8 = new ethers.Contract(process.env.TCH8_ADDRESS, tch8Abi, provider);
 
   console.log('Indexer connected. Listening for Escrow events...');
 
+  // This handles your successful purchases and logs them to the database
   escrow.on('OrderCreated', async (orderId, buyer, seller, amount, event) => {
-    await pool.query(
-      `INSERT INTO orders (order_id, buyer_address, seller_address, amount, status, tx_hash)
-       VALUES ($1, $2, $3, $4, 'Paid', $5) ON CONFLICT (order_id) DO NOTHING`,
-      [Number(orderId), buyer, seller, amount.toString(), event.log.transactionHash]
-    );
+    try {
+      await pool.query(
+        `INSERT INTO orders (order_id, buyer_address, seller_address, amount, status, tx_hash)
+         VALUES ($1, $2, $3, $4, 'Paid', $5) ON CONFLICT (order_id) DO NOTHING`,
+        [Number(orderId), buyer.toLowerCase(), seller.toLowerCase(), amount.toString(), event.log.transactionHash]
+      );
+      console.log(`📦 Order #${orderId} saved to database.`);
+    } catch (err) {
+      console.error('Error saving OrderCreated event:', err);
+    }
   });
 
   escrow.on('Delivered', async (orderId) => {
@@ -39,7 +49,7 @@ async function main() {
   escrow.on('RedemptionRequested', async (redemptionId, seller, amount) => {
     await pool.query(
       `INSERT INTO redemptions (redemption_id, seller_address, amount, status) VALUES ($1, $2, $3, 'Pending') ON CONFLICT (redemption_id) DO NOTHING`,
-      [Number(redemptionId), seller, amount.toString()]
+      [Number(redemptionId), seller.toLowerCase(), amount.toString()]
     );
   });
 
@@ -50,6 +60,7 @@ async function main() {
   escrow.on('RedemptionRejected', async (redemptionId) => {
     await pool.query(`UPDATE redemptions SET status = 'Rejected', updated_at = now() WHERE redemption_id = $1`, [Number(redemptionId)]);
   });
+
 }
 
 main().catch((err) => {

@@ -39,7 +39,6 @@ contract Escrow is ReentrancyGuard {
 
     IERC20 public immutable token;
     uint256 public autoReleaseWindow = 7 days;
-
     uint256 public nextOrderId;
     mapping(uint256 => Order) public orders;
 
@@ -92,36 +91,41 @@ contract Escrow is ReentrancyGuard {
         operator = _operator;
     }
 
-    function createOrder(address seller, uint256 amount) external nonReentrant returns (uint256 orderId) {
-        if (seller == address(0)) revert ZeroAddressError();
+    /// @notice Creates an escrow order pulling funds from the buyer to be released to the seller.
+    function createOrder(address buyer, address seller, uint256 amount) external nonReentrant returns (uint256 orderId) {
+        if (buyer == address(0) || seller == address(0)) revert ZeroAddressError();
         if (amount == 0) revert InvalidAmountError();
 
         orderId = nextOrderId++;
         orders[orderId] = Order({
-            buyer: msg.sender,
+            buyer: buyer,
             seller: seller,
             amount: amount,
             deliveredAt: 0,
             status: Status.Paid
         });
 
-        emit OrderCreated(orderId, msg.sender, seller, amount);
+        emit OrderCreated(orderId, buyer, seller, amount);
 
-        bool ok = token.transferFrom(msg.sender, address(this), amount);
+        // Pulls tokens safely from the buyer's wallet (Requires buyer to approve this Escrow contract first)
+        bool ok = token.transferFrom(buyer, address(this), amount);
         if (!ok) revert TransferFailedError();
     }
 
     function markDelivered(uint256 orderId) external onlySeller(orderId) {
         Order storage o = orders[orderId];
         if (o.status != Status.Paid) revert WrongStatusError();
+
         o.status = Status.Delivered;
         o.deliveredAt = block.timestamp;
+
         emit Delivered(orderId);
     }
 
     function confirmDelivery(uint256 orderId) external onlyBuyer(orderId) nonReentrant {
         Order storage o = orders[orderId];
         if (o.status != Status.Delivered) revert WrongStatusError();
+
         _release(orderId, o);
     }
 
@@ -129,12 +133,14 @@ contract Escrow is ReentrancyGuard {
         Order storage o = orders[orderId];
         if (o.status != Status.Delivered) revert WrongStatusError();
         if (block.timestamp < o.deliveredAt + autoReleaseWindow) revert WrongStatusError();
+
         _release(orderId, o);
     }
 
     function refundBeforeDelivery(uint256 orderId) external onlyBuyer(orderId) nonReentrant {
         Order storage o = orders[orderId];
         if (o.status != Status.Paid) revert WrongStatusError();
+
         _refund(orderId, o);
     }
 
@@ -142,6 +148,7 @@ contract Escrow is ReentrancyGuard {
         Order storage o = orders[orderId];
         if (msg.sender != o.buyer && msg.sender != o.seller) revert NotBuyerError();
         if (o.status != Status.Paid && o.status != Status.Delivered) revert WrongStatusError();
+
         o.status = Status.Disputed;
         emit Disputed(orderId);
     }
@@ -170,7 +177,6 @@ contract Escrow is ReentrancyGuard {
         address seller = r.seller;
 
         r.status = RedemptionStatus.Completed;
-
         ITCH8Burn(address(token)).burn(amount);
 
         emit RedemptionCompleted(redemptionId, seller, amount);
@@ -184,7 +190,6 @@ contract Escrow is ReentrancyGuard {
         address seller = r.seller;
 
         r.status = RedemptionStatus.Rejected;
-
         bool ok = token.transfer(seller, amount);
         if (!ok) revert TransferFailedError();
 
@@ -232,8 +237,10 @@ contract Escrow is ReentrancyGuard {
         address seller = o.seller;
         o.status = Status.Released;
         o.amount = 0;
+
         bool ok = token.transfer(seller, amount);
         if (!ok) revert TransferFailedError();
+
         emit Released(orderId, seller, amount);
     }
 
@@ -242,8 +249,10 @@ contract Escrow is ReentrancyGuard {
         address buyer = o.buyer;
         o.status = Status.Refunded;
         o.amount = 0;
+
         bool ok = token.transfer(buyer, amount);
         if (!ok) revert TransferFailedError();
+
         emit Refunded(orderId, buyer, amount);
     }
 }

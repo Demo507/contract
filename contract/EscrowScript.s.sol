@@ -1,45 +1,32 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Script} from "forge-std/Script.sol";
-import {console} from "forge-std/console.sol";
-import {Escrow} from "../src/Escrow.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {Escrow} from "../src/Escrow.sol"; // Adjust path to your contract
 
-contract Escrow is Script {
-    function run() external {
-        // 1. Fetch the deployment private key from your local .env file
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        
-        // 2. Fetch your ALREADY deployed TCH8 token address from your .env file
-        address tch8TokenAddress = vm.envAddress("TCH8_TOKEN_ADDRESS");
-        
-        // 3. Define who the Governance and Operator should be
-        // (For simplicity, we can use the deployer's address derived from the private key)
-        address governanceWallet = vm.addr(deployerPrivateKey);
-        address operatorWallet = vm.addr(deployerPrivateKey);
+contract DeployEscrow is Script {
+    function run() external returns (Escrow escrow) {
+        // 1. Fetch deployment configuration parameters from environment variables
+        // This ensures secrets and network-specific variables are never hardcoded.
+        uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        address tokenAddress = vm.envAddress("TOKEN_ADDRESS");
+        address governanceAddress = vm.envAddress("GOVERNANCE_ADDRESS");
+        address operatorAddress = vm.envAddress("OPERATOR_ADDRESS");
 
-        console.log("Starting Escrow Deployment Setup...");
-        console.log("Using TCH8 Token Address:", tch8TokenAddress);
-        console.log("Setting Initial Governance:", governanceWallet);
-        console.log("Setting Initial Operator:", operatorWallet);
-        console.log("--------------------------------------------------");
+        // 2. Output diagnostic info to terminal
+        console2.log("Preparing deployment from account:", vm.addr(deployerPrivateKey));
+        console2.log("Target ERC20 Token Address:", tokenAddress);
+        console2.log("Designated Governance Address:", governanceAddress);
+        console2.log("Designated Operator Address:", operatorAddress);
 
-        // 4. Start broadcasting real transactions to the blockchain network
+        // 3. Initiate the on-chain broadcast sequence
         vm.startBroadcast(deployerPrivateKey);
 
-        // 5. Deploy the Escrow contract live by passing parameters into the constructor
-        Escrow escrow = new Escrow(
-            tch8TokenAddress,
-            governanceWallet,
-            operatorWallet
-        );
+        escrow = new Escrow(tokenAddress, governanceAddress, operatorAddress);
 
         vm.stopBroadcast();
 
-        // 6. Print out the freshly generated address so you can copy it to your backend env!
-        console.log("--------------------------------------------------");
-        console.log("✅ Escrow Contract Deployed Successfully!");
-        console.log("🚀 Live Escrow Address:", address(escrow));
-        console.log("--------------------------------------------------");
+        // 4. Log the output deployment result
+        console2.log("Escrow contract successfully deployed at:", address(escrow));
     }
 }

@@ -1,4 +1,4 @@
-[
+export const tch8Abi = [
   "function name() view returns (string)",
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
@@ -11,4 +11,4 @@
   "function governance() view returns (address)",
   "event Transfer(address indexed from, address indexed to, uint256 value)",
   "event Approval(address indexed owner, address indexed spender, uint256 value)"
-]
+];
