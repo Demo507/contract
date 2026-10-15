@@ -1,5 +1,5 @@
 export const escrowAbi = [
-  "function createOrder(address seller, uint256 amount) returns (uint256 orderId)",
+  "function createOrder(address buyer, address seller, uint256 amount) returns (uint256 orderId)",
   "function markDelivered(uint256 orderId)",
   "function confirmDelivery(uint256 orderId)",
   "function claimAfterWindow(uint256 orderId)",
@@ -46,3 +46,4 @@ export const escrowAbi = [
   "error OnlyOperatorError()",
   "error CannotBuyOwnListingError()"
 ];
+

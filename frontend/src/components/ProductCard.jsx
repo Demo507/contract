@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
-import { parseEther } from 'viem';
+import { parseUnits } from 'viem'; // Updated from parseEther to parseUnits
 import {
   useAccount,
   useWriteContract,
   useWaitForTransactionReceipt,
   usePublicClient,
 } from 'wagmi';
-import { TCH8_ADDRESS, ESCROW_ADDRESS } from '../contracts/addresses.js';
-import { tch8Abi } from '../contracts/tch8Abi.js';
-import { escrowAbi } from '../contracts/escrowAbi.js';
+import { TCH8_ADDRESS, ESCROW_ADDRESS } from '/src/contracts/addresses.js';
+import { tch8Abi } from '/src/contracts/tch8Abi.js';
+import { escrowAbi } from '/src/contracts/escrowAbi.js';
 
 function shorten(addr) {
   return addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : '';
@@ -44,12 +44,17 @@ export default function ProductCard({ product }) {
     }
   }, [isOrderSuccess]);
 
-  // Step A: approve the escrow to spend the price in TCH8 (18 decimals)
+  // Helper function to safely format the price into 6 decimals
+  const getParsedAmount = () => {
+    return parseUnits(String(product.price_tch8), 6);
+  };
+
+  // Step A: approve the escrow to spend the price in TCH8 (6 decimals)
   async function handleBuy() {
     if (!isConnected) return;
 
     try {
-      const amount = parseEther(String(product.price_tch8));
+      const amount = getParsedAmount();
       setStep('approving');
       const hash = await txActionAsync({
         address: TCH8_ADDRESS,
@@ -67,24 +72,24 @@ export default function ProductCard({ product }) {
   // Step B: lock the funds in escrow. The contract uses msg.sender as the buyer.
   async function executeOrderCreation() {
     try {
-      const amount = parseEther(String(product.price_tch8));
+      const amount = getParsedAmount();
       setStep('creating');
 
-      // Simulate first: if the contract would revert, we get a readable
-      // reason in the console instead of a failing MetaMask popup.
+      // Simulate first: catches reverts early before users sign/waste gas
       await publicClient.simulateContract({
         account: address,
         address: ESCROW_ADDRESS,
         abi: escrowAbi,
         functionName: 'createOrder',
-        args: [product.seller_address, amount],
+        args: [address, product.seller_address, amount],
       });
 
+      // Send transaction: passing [buyer, seller, amount]
       const hash = await txActionAsync({
         address: ESCROW_ADDRESS,
         abi: escrowAbi,
         functionName: 'createOrder',
-        args: [product.seller_address, amount],
+        args: [address, product.seller_address, amount],
       });
       setOrderHash(hash);
     } catch (err) {
@@ -166,3 +171,4 @@ export default function ProductCard({ product }) {
     </div>
   );
 }
+
