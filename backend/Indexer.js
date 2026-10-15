@@ -4,7 +4,7 @@ import { pool, initDb } from './db.js';
 
 // Standard JavaScript imports matching your .js ABI files
 import { escrowAbi } from './contracts/Escrow.abi.js';
-import { tch8Abi } from './contracts/TCH8.Abi.js';
+import { tch8Abi } from './contracts/TCH8.abi.js';
 
 async function main() {
   await initDb();
