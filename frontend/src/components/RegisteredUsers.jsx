@@ -1,21 +1,11 @@
 import { useEffect, useState } from 'react';
-import { BACKEND_URL } from '../contracts/addresses.js';
+import { api } from '../lib/api.js';
 
 export default function RegisteredUsers() {
   const [count, setCount] = useState(null);
-
   useEffect(() => {
-    fetch(`${BACKEND_URL}/api/users/count`)
-      .then((r) => r.json())
-      .then((data) => setCount(data.count))
-      .catch(() => {});
+    api('/api/users/count').then((d) => setCount(d.count)).catch(() => {});
   }, []);
-
   if (count === null) return null;
-
-  return (
-    <div style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>
-      {count} registered
-    </div>
-  );
+  return <div className="text-xs muted">{count} registered</div>;
 }

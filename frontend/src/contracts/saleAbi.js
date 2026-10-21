@@ -1,4 +1,6 @@
-export const saleAbi = [
-  { type: 'function', name: 'buy', stateMutability: 'payable', inputs: [], outputs: [] },
-  { type: 'function', name: 'priceWeiPerToken', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
-];
+import { parseAbi } from 'viem';
+
+export const saleAbi = parseAbi([
+  'function buy() payable',
+  'function priceWeiPerToken() view returns (uint256)',
+]);

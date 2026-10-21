@@ -1,174 +1,109 @@
-import { useState, useEffect } from 'react';
-import { parseUnits } from 'viem'; // Updated from parseEther to parseUnits
-import {
-  useAccount,
-  useWriteContract,
-  useWaitForTransactionReceipt,
-  usePublicClient,
-} from 'wagmi';
-import { TCH8_ADDRESS, ESCROW_ADDRESS } from '/src/contracts/addresses.js';
-import { tch8Abi } from '/src/contracts/tch8Abi.js';
-import { escrowAbi } from '/src/contracts/escrowAbi.js';
-
-function shorten(addr) {
-  return addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : '';
-}
+import { useState } from 'react';
+import { parseUnits, parseEventLogs } from 'viem';
+import { useAccount } from 'wagmi';
+import { TCH8_ADDRESS, ESCROW_ADDRESS, TOKEN_DECIMALS } from '../contracts/addresses.js';
+import { tch8Abi } from '../contracts/tch8Abi.js';
+import { escrowAbi } from '../contracts/escrowAbi.js';
+import { useTx, friendlyError } from '../lib/useTx.js';
+import { getEscrowMode } from '../lib/escrowMode.js';
+import { syncOrder } from '../lib/api.js';
+import { shorten } from '../lib/format.js';
 
 export default function ProductCard({ product }) {
   const { isConnected, address } = useAccount();
-  const publicClient = usePublicClient();
-  const [step, setStep] = useState('idle');
-  const [approveHash, setApproveHash] = useState(null);
-  const [orderHash, setOrderHash] = useState(null);
+  const { send, refresh, publicClient } = useTx();
+  const [step, setStep] = useState('idle'); // idle | approving | creating | done | error
+  const [msg, setMsg] = useState('');
 
-  const { writeContractAsync: txActionAsync } = useWriteContract();
+  const isOwn = Boolean(address) && product.seller_address?.toLowerCase() === address.toLowerCase();
 
-  const { isLoading: isApprovalConfirming, isSuccess: isApprovalSuccess } =
-    useWaitForTransactionReceipt({ hash: approveHash });
-
-  const { isLoading: isOrderConfirming, isSuccess: isOrderSuccess } =
-    useWaitForTransactionReceipt({ hash: orderHash });
-
-  // Once approval is mined, create the escrow order
-  useEffect(() => {
-    if (isApprovalSuccess && step === 'approving') {
-      executeOrderCreation();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isApprovalSuccess]);
-
-  // Mark done once the order is mined
-  useEffect(() => {
-    if (isOrderSuccess) {
-      setStep('done');
-    }
-  }, [isOrderSuccess]);
-
-  // Helper function to safely format the price into 6 decimals
-  const getParsedAmount = () => {
-    return parseUnits(String(product.price_tch8), 6);
-  };
-
-  // Step A: approve the escrow to spend the price in TCH8 (6 decimals)
   async function handleBuy() {
-    if (!isConnected) return;
-
+    setMsg('');
     try {
-      const amount = getParsedAmount();
+      // TCH8 has 6 decimals (parseUnits(..., 6)), NOT 18.
+      const amount = parseUnits(String(product.price_tch8), TOKEN_DECIMALS);
+
+      // 1) Make sure the buyer can actually pay
+      const balance = await publicClient.readContract({
+        address: TCH8_ADDRESS, abi: tch8Abi, functionName: 'balanceOf', args: [address],
+      });
+      if (balance < amount) {
+        setStep('error');
+        setMsg('You do not have enough TCH8. Get some on the "Buy TCH8" page first.');
+        return;
+      }
+
+      // 2) Allow the Escrow to take the price from THIS wallet (only if not already allowed)
       setStep('approving');
-      const hash = await txActionAsync({
-        address: TCH8_ADDRESS,
-        abi: tch8Abi,
-        functionName: 'approve',
-        args: [ESCROW_ADDRESS, amount],
+      const allowance = await publicClient.readContract({
+        address: TCH8_ADDRESS, abi: tch8Abi, functionName: 'allowance', args: [address, ESCROW_ADDRESS],
       });
-      setApproveHash(hash);
-    } catch (err) {
-      console.error('Approval error:', err.shortMessage || err.message, err);
-      setStep('error');
-    }
-  }
+      if (allowance < amount) {
+        await send({ address: TCH8_ADDRESS, abi: tch8Abi, functionName: 'approve', args: [ESCROW_ADDRESS, amount] });
+      }
 
-  // Step B: lock the funds in escrow. The contract uses msg.sender as the buyer.
-  async function executeOrderCreation() {
-    try {
-      const amount = getParsedAmount();
+      // 3) Place the order. Money goes buyer wallet -> Escrow.
       setStep('creating');
+      const mode = await getEscrowMode(publicClient);
+      const seller = product.seller_address.toLowerCase();
+      const args = mode === 'v2' ? [seller, amount] : [address, seller, amount];
+      const { hash, receipt } = await send({ address: ESCROW_ADDRESS, abi: escrowAbi, functionName: 'createOrder', args });
 
-      // Simulate first: catches reverts early before users sign/waste gas
-      await publicClient.simulateContract({
-        account: address,
-        address: ESCROW_ADDRESS,
-        abi: escrowAbi,
-        functionName: 'createOrder',
-        args: [address, product.seller_address, amount],
-      });
-
-      // Send transaction: passing [buyer, seller, amount]
-      const hash = await txActionAsync({
-        address: ESCROW_ADDRESS,
-        abi: escrowAbi,
-        functionName: 'createOrder',
-        args: [address, product.seller_address, amount],
-      });
-      setOrderHash(hash);
-    } catch (err) {
-      console.error('Order creation error:', err.shortMessage || err.message, err);
+      // 4) Save it (the backend reads the order from the chain itself)
+      const logs = parseEventLogs({ abi: escrowAbi, logs: receipt.logs, eventName: 'OrderCreated' });
+      const orderId = logs[0]?.args?.orderId;
+      if (orderId !== undefined) {
+        try { await syncOrder(Number(orderId), { product_id: product.id, tx_hash: hash }); } catch { /* refresh will catch up */ }
+      }
+      refresh();
+      setStep('done');
+    } catch (e) {
+      console.error(e);
       setStep('error');
+      setMsg(friendlyError(e));
     }
   }
 
-  const getBuyLabel = () => {
-    if (step === 'approving')
-      return isApprovalConfirming ? 'Confirming Approval…' : 'Signing Approval…';
-    if (step === 'creating')
-      return isOrderConfirming ? 'Locking Escrow…' : 'Placing Order…';
-    if (step === 'done') return '✓ Purchased';
-    if (step === 'error') return 'Try Again';
-    return 'Buy Now';
-  };
+  const label = {
+    idle: 'Buy now',
+    approving: 'Step 1/2: approve in wallet…',
+    creating: 'Step 2/2: placing order…',
+    done: '✓ Order placed',
+    error: 'Try again',
+  }[step];
 
   return (
-    <div className="w-full flex flex-col h-full bg-[var(--color-surface)] border border-[var(--color-line)] rounded-xl overflow-hidden shadow-sm group hover:border-[var(--color-brass)] transition-all duration-200">
-      {/* Product Image Frame */}
+    <div className="card overflow-hidden flex flex-col h-full">
       {product.image_url ? (
-        <img
-          src={product.image_url}
-          alt={product.title}
-          className="w-full h-44 object-cover group-hover:scale-[1.02] transition-transform duration-300"
-        />
+        <img src={product.image_url} alt={product.title} className="w-full h-44 object-cover" />
       ) : (
-        <div className="w-full h-44 flex items-center justify-center bg-[var(--color-ink)]/40 text-[var(--color-muted)] font-display text-4xl border-b border-[var(--color-line)] select-none">
+        <div className="w-full h-44 flex items-center justify-center font-display text-4xl select-none"
+             style={{ background: 'var(--color-surface-raised)', color: 'var(--color-line)' }}>
           {product.title?.[0]?.toUpperCase() || '?'}
         </div>
       )}
+      <div className="p-5 flex flex-col gap-2 flex-1">
+        <h3 className="font-display text-lg leading-snug">{product.title}</h3>
+        {product.description && <p className="text-sm muted flex-1">{product.description}</p>}
+        <p className="text-xs muted">Seller: <span className="font-mono">{shorten(product.seller_address)}</span></p>
 
-      {/* Card Details Block */}
-      <div className="p-5 flex flex-col flex-1 gap-2">
-        <h3 className="font-display font-bold text-base text-white tracking-tight leading-snug">
-          {product.title}
-        </h3>
-
-        {product.description && (
-          <p className="text-xs text-[var(--color-muted)] flex-1 leading-relaxed line-clamp-3">
-            {product.description}
-          </p>
-        )}
-
-        <p className="text-[11px] font-medium text-[var(--color-muted)] mt-1">
-          Vendor:{' '}
-          <span className="font-mono text-gray-400">
-            {shorten(product.seller_address)}
-          </span>
-        </p>
-
-        {/* Footer Pricing & Call-to-Action Panel */}
-        <div className="flex items-center justify-between pt-4 mt-2 border-t border-[var(--color-line)]">
-          <div className="flex flex-col">
-            <span className="text-[9px] uppercase font-semibold text-[var(--color-muted)] tracking-wider">
-              Price
-            </span>
-            <span className="font-display font-bold text-base text-[var(--color-brass)]">
-              {product.price_tch8} TCH8
-            </span>
-          </div>
-
-          <button
-            onClick={handleBuy}
-            disabled={
-              !isConnected ||
-              step === 'approving' ||
-              step === 'creating' ||
-              step === 'done'
-            }
-            className="px-4 py-2 text-xs font-bold rounded-lg text-[var(--color-ink)] transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 shadow"
-            style={{ background: 'var(--color-brass)' }}
-          >
-            {getBuyLabel()}
-          </button>
+        <div className="flex items-center justify-between pt-3 mt-1" style={{ borderTop: '1px solid var(--color-line)' }}>
+          <span className="font-display text-lg" style={{ color: 'var(--color-brass)' }}>{product.price_tch8} TCH8</span>
+          {isOwn ? (
+            <span className="text-xs muted">Your listing</span>
+          ) : (
+            <button
+              className="btn"
+              onClick={handleBuy}
+              disabled={!isConnected || step === 'approving' || step === 'creating' || step === 'done'}
+            >
+              {label}
+            </button>
+          )}
         </div>
+        {step === 'done' && <p className="ok">Payment is locked in escrow. Track it under "My Orders".</p>}
+        {msg && <p className="err">{msg}</p>}
       </div>
     </div>
   );
 }
-

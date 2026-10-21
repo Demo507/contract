@@ -1,57 +1,32 @@
-import { Router } from 'express';
+import express from 'express';
 import { pool } from '../db.js';
+import { wrap, lc } from '../middleware.js';
 
-const router = Router();
+const router = express.Router();
 
-router.get('/user/:address', async (req, res) => {
-  const userAddress = req.params.address.toLowerCase();
-  
-  try {
-    // 1. Fetch all escrow orders involving this specific wallet string
-    const ordersQuery = await pool.query(
-      `SELECT amount, buyer_address, seller_address, created_at 
-       FROM orders 
-       WHERE LOWER(buyer_address) = $1 OR LOWER(seller_address) = $1`,
-      [userAddress]
-    );
+router.get('/user/:address', wrap(async (req, res) => {
+  const me = lc(req.params.address);
+  const { rows } = await pool.query(
+    `SELECT amount, buyer_address, seller_address, created_at FROM orders
+     WHERE LOWER(buyer_address) = $1 OR LOWER(seller_address) = $1`, [me]);
 
-    const now = new Date();
-    const oneDayAgo = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+  const now = new Date();
+  const dayAgo = new Date(now.getTime() - 24 * 3600 * 1000);
+  let daily = 0, monthly = 0, yearly = 0, bought = 0, sold = 0;
 
-    let dailyVolume = 0;
-    let monthlyVolume = 0;
-    let yearlyVolume = 0;
-    let itemsBoughtCount = 0;
-    let itemsSoldCount = 0;
-
-    ordersQuery.rows.forEach(order => {
-      const orderDate = new Date(order.created_at);
-      
-      // Use standard parseFloat on string-based blockchain amounts safely
-      const amount = parseFloat(order.amount || 0);
-      const buyer = order.buyer_address.toLowerCase();
-      const seller = order.seller_address.toLowerCase();
-
-      // Aggregate volume time segments
-      if (orderDate >= oneDayAgo) dailyVolume += amount;
-      if (orderDate.getMonth() === currentMonth && orderDate.getFullYear() === currentYear) monthlyVolume += amount;
-      if (orderDate.getFullYear() === currentYear) yearlyVolume += amount;
-
-      // Map action frequency metrics
-      if (buyer === userAddress) itemsBoughtCount += 1;
-      if (seller === userAddress) itemsSoldCount += 1;
-    });
-
-    res.json({
-      analytics: { dailyVolume, monthlyVolume, yearlyVolume },
-      summary: { tokensBoughtTotal: 0, itemsBoughtCount, itemsSoldCount }
-    });
-  } catch (err) {
-    console.error('Analytics calculation engine failed:', err);
-    res.status(500).json({ error: 'Failed computing analytics database arrays' });
+  for (const o of rows) {
+    const d = new Date(o.created_at);
+    const amt = Number(o.amount || 0) / 1e6; // base units -> TCH8
+    if (d >= dayAgo) daily += amt;
+    if (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) monthly += amt;
+    if (d.getFullYear() === now.getFullYear()) yearly += amt;
+    if (lc(o.buyer_address) === me) bought++;
+    if (lc(o.seller_address) === me) sold++;
   }
-});
+  res.json({
+    analytics: { dailyVolume: daily, monthlyVolume: monthly, yearlyVolume: yearly },
+    summary: { itemsBoughtCount: bought, itemsSoldCount: sold },
+  });
+}));
 
 export default router;
